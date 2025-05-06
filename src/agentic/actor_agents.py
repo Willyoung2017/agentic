@@ -70,7 +70,6 @@ from agentic.tools.utils.registry import tool_registry
 from agentic.db.db_manager import DatabaseManager
 from agentic.models import get_special_model_params, mock_provider
 
-
 __CTX_VARS_NAME__ = "run_context"
 
 # define a CallbackType Enum with values: "handle_turn_start", "handle_event", "handle_turn_end"
@@ -78,6 +77,7 @@ CallbackType = Literal["handle_turn_start", "handle_event", "handle_turn_end"]
 
 # make a Callable type that expects a Prompt and RunContext
 CallbackFunc = Callable[[Event, RunContext], None]
+
 
 @dataclass
 class AgentPauseContext:
@@ -101,6 +101,7 @@ else:
 
 _AGENT_REGISTRY = []
 
+
 @ray.remote
 class ActorBaseAgent:
     name: str = "Agent"
@@ -123,7 +124,7 @@ class ActorBaseAgent:
     api_endpoint: str = None
     _prompter = None
     _callbacks: dict[CallbackType, CallbackFunc] = {}
-    result_model: Type[BaseModel]|None = None,
+    result_model: Type[BaseModel] | None = None,
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True
@@ -143,11 +144,11 @@ class ActorBaseAgent:
         return self.name
 
     def _get_llm_completion(
-        self,
-        history: List,
-        run_context: RunContext,
-        model_override: str,
-        stream: bool,
+            self,
+            history: List,
+            run_context: RunContext,
+            model_override: str,
+            stream: bool,
     ) -> ChatCompletionMessage:
         """Call the LLM completion endpoint"""
         instructions = self.get_instructions(run_context)
@@ -182,7 +183,7 @@ class ActorBaseAgent:
 
         if tools:
             completion_params["parallel_tool_calls"] = self.parallel_tool_calls
-            
+
         # Create simplified version of params for debug logging
         debug_params = completion_params.copy()
         if debug_params.get("tools"):
@@ -192,20 +193,20 @@ class ActorBaseAgent:
 
         # Get model name
         model_name = model_override or self.model
-        
+
         # Import token estimation utilities
         from agentic.utils.token_estimation import (
             should_compress_context,
             create_compressed_messages
         )
-        
+
         # Check if we need to compress context
         needs_compression, current_tokens, max_allowed = should_compress_context(
-            messages=messages, 
+            messages=messages,
             model=model_name,
             safety_factor=0.3  # Use 30% safety margin
         )
-        
+
         # Debug logging for token count
         if self.debug.debug_all():
             print(f"[Token Count] Model: {model_name}, Current tokens: {current_tokens}, Max: {max_allowed}")
@@ -219,26 +220,26 @@ class ActorBaseAgent:
                 current_tokens=current_tokens,
                 debug=self.debug.debug_all()
             )
-            
+
             # Update completion params with compressed messages
             completion_params["messages"] = truncated_messages
-            
+
             # Update history but preserve system message
             self.history = [messages[0]] + truncated_messages[2:]
 
         debug_completion_start(self.debug, self.model, debug_params)
-        
+
         try:
             return litellm.completion(**completion_params)
         except litellm.exceptions.ContextWindowExceededError as e:
             # Emergency fallback
             print(f"Emergency fallback: {str(e)}")
-            
+
             # Keep only the system message and most recent message
             emergency_messages = [messages[0], messages[-1]]
             completion_params["messages"] = emergency_messages
             self.history = emergency_messages
-            
+
             # Try one more time with minimal context
             return litellm.completion(**completion_params)
         except Exception as e:
@@ -246,10 +247,10 @@ class ActorBaseAgent:
             raise RuntimeError("Error calling LLM: " + str(e))
 
     def _execute_tool_calls(
-        self,
-        tool_calls: List[ChatCompletionMessageToolCall],
-        functions: List[AgentFunction],
-        run_context: RunContext,
+            self,
+            tool_calls: List[ChatCompletionMessageToolCall],
+            functions: List[AgentFunction],
+            run_context: RunContext,
     ) -> tuple[Response, list[Event]]:
         """When the LLM completion includes tool calls, now invoke the tool functions.
         Returns the LLM processing response, and a list of events to publish
@@ -302,7 +303,7 @@ class ActorBaseAgent:
                     except RuntimeError:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
-                    
+
                     raw_result = loop.run_until_complete(function_map[name](**args))
                 elif inspect.isgeneratorfunction(function_map[name]):
                     # We use our generator for our call_child function. I guess we could let user's
@@ -325,6 +326,7 @@ class ActorBaseAgent:
                     async def run_async_gen():
                         async for event in function_map[name](**args):
                             events.append(event)
+
                     asyncio.run(run_async_gen())
                     # take the last yielded value as the function result
                     raw_result = events.pop()
@@ -355,7 +357,7 @@ class ActorBaseAgent:
                 raw_result = [result for result in raw_result if not isinstance(result, Event)]
                 if len(raw_result) == 0:
                     raw_result = ""
-                
+
             result: Result = (
                 raw_result
                 if isinstance(raw_result, Result)
@@ -394,7 +396,7 @@ class ActorBaseAgent:
         request_id = getattr(actor_message, 'request_id', None)
         if not request_id:
             raise ValueError("Request ID is required")
-        
+
         if isinstance(actor_message, Prompt):
             self.run_context = (
                 RunContext(
@@ -411,7 +413,7 @@ class ActorBaseAgent:
             # Middleware to modify the input prompt (or change agent context)
             if self._callbacks.get('handle_turn_start'):
                 self._callbacks['handle_turn_start'](actor_message, self.run_context)
-                
+
             self.debug = actor_message.debug
             self.depth = actor_message.depth
             self.history.append({"role": "user", "content": actor_message.payload})
@@ -424,14 +426,14 @@ class ActorBaseAgent:
                     actor_message,
                 )
                 return
-                
+
             init_len = self.paused_context.orig_history_length
             self.run_context.update(actor_message.request_keys.copy())
-            
+
             tool_function = self.paused_context.tool_function
             if tool_function is None:
                 raise RuntimeError("Tool function not found on AgentResume event")
-                
+
             partial_response, events = self._execute_tool_calls(
                 [ChatCompletionMessageToolCall(
                     id=(tool_function._request_id or ""),
@@ -451,7 +453,7 @@ class ActorBaseAgent:
 
             assert isinstance(event, FinishCompletion)
             response: Message = event.response
-            
+
             self.history.append(response)
             if not response.tool_calls:
                 break
@@ -492,7 +494,7 @@ class ActorBaseAgent:
                         depth=self.depth
                     )
                     return
-                    
+
                 elif FinishAgentResult.matches_sentinel(partial_response.messages[-1]["content"]):
                     self.history.extend(partial_response.messages)
                     break
@@ -558,7 +560,7 @@ class ActorBaseAgent:
         llm_message = litellm.stream_chunk_builder(chunks, messages=self.history)
         input = self.history[-1:]
         output = llm_message.choices[0].message
-        
+
         # Get usage directly from response
         usage = getattr(llm_message, "usage", None)
         if usage:
@@ -589,10 +591,10 @@ class ActorBaseAgent:
         )
 
     def call_child(
-        self,
-        child_ref,
-        handoff: bool,
-        message,
+            self,
+            child_ref,
+            handoff: bool,
+            message,
     ):
         depth = self.depth if handoff else self.depth + 1
         if hasattr(child_ref.handle_prompt_or_resume, 'remote'):
@@ -615,7 +617,7 @@ class ActorBaseAgent:
                     request_id=str(uuid.uuid4())
                 )
             )
-        
+
         for remote_event in remote_gen:
             event = ray.get(remote_event)
             yield event
@@ -676,7 +678,7 @@ class ActorBaseAgent:
         # Support context var substitution in prompts
         try:
             prompt = Template(
-                self.instructions_str, 
+                self.instructions_str,
                 undefined=DebugUndefined
             ).render(
                 context.get_context()
@@ -762,7 +764,7 @@ class ActorBaseAgent:
 
     def webhook(self, run_id: str, callback_name: str, args: dict) -> Any:
         """Handle webhook callbacks by executing the specified tool function
-        
+
         Args:
             run_id: ID of the agent run this webhook is for
             callback_name: Name of the tool function to call
@@ -776,7 +778,7 @@ class ActorBaseAgent:
         # Recreate run context
         self.run_context = RunContext(
             agent=self,
-            agent_name=self.name, 
+            agent_name=self.name,
             debug_level=self.debug,
             run_id=run_id,
             api_endpoint=self.api_endpoint
@@ -794,7 +796,7 @@ class ActorBaseAgent:
                 type="function",
                 function=Function(
                     name=callback_name,
-                    arguments=json.dumps({"webhook_data":args})
+                    arguments=json.dumps({"webhook_data": args})
                 )
             )
 
@@ -814,17 +816,18 @@ class ActorBaseAgent:
         """Store mock parameters in the agent instance"""
         # Import here to avoid circular imports
         from agentic.models import mock_provider
-        
+
         # Apply to the mock provider (happens in this worker process)
         mock_provider.set_response(pattern, response)
         mock_provider.clear_tools()
         for name, tool in tools.items():
             mock_provider.register_tool(name, tool)
-            
+
         # Make sure custom provider is registered in litellm
         litellm.custom_provider_map = [
             {"provider": "mock", "custom_handler": mock_provider}
         ]
+
 
 class HandoffAgentWrapper:
     def __init__(self, agent):
@@ -839,10 +842,12 @@ def handoff(agent, **kwargs):
     called as a subroutine."""
     return HandoffAgentWrapper(agent)
 
+
 class ProcessRequest(BaseModel):
     prompt: str
     debug: Optional[str] = None
     run_id: Optional[str] = None
+
 
 class ResumeWithInputRequest(BaseModel):
     continue_result: dict[str, str]
@@ -852,6 +857,7 @@ class ResumeWithInputRequest(BaseModel):
 
 depthLocal = threading.local()
 depthLocal.depth = -1
+
 
 # The common agent proxy interface
 # The core of the interface is 'start_request' and 'get_events'. Use these in
@@ -864,27 +870,27 @@ class BaseAgentProxy:
     """Base agent proxy class with common functionality. Manages multiple parallel
     requests, delegating each request to an instance of the agent class.
     The proxy keeps a thread queue to dispatch agent events to the caller.
-    Subclasses will handle specific implementation details for different 
+    Subclasses will handle specific implementation details for different
     execution environments (Ray, local, etc.)
     """
     _agent: Any
 
     def __init__(
-        self,
-        name: str,
-        instructions: str | None = "You are a helpful assistant.",
-        welcome: str | None = None,
-        tools: list = None,
-        model: str | None = None,
-        template_path: str | Path | None = None,
-        max_tokens: int = None,
-        db_path: Optional[str | Path] = "./agent_runs.db",
-        memories: list[str] = [],
-        handle_turn_start: Callable[[Prompt, RunContext], None] = None,
-        result_model: Type[BaseModel]|None = None,
-        debug: DebugLevel = DebugLevel(os.environ.get("AGENTIC_DEBUG") or ""),
-        mock_settings: dict = None,
-        prompts: Optional[dict[str, str]] = None,
+            self,
+            name: str,
+            instructions: str | None = "You are a helpful assistant.",
+            welcome: str | None = None,
+            tools: list = None,
+            model: str | None = None,
+            template_path: str | Path | None = None,
+            max_tokens: int = None,
+            db_path: Optional[str | Path] = "./agent_runs.db",
+            memories: list[str] = [],
+            handle_turn_start: Callable[[Prompt, RunContext], None] = None,
+            result_model: Type[BaseModel] | None = None,
+            debug: DebugLevel = DebugLevel(os.environ.get("AGENTIC_DEBUG") or ""),
+            mock_settings: dict = None,
+            prompts: Optional[dict[str, str]] = None,
     ):
         self.name = name
         self.welcome = welcome or f"Hello, I am {name}."
@@ -892,24 +898,24 @@ class BaseAgentProxy:
         self.prompts = prompts or {}
         self.cancelled = False
         self.mock_settings = mock_settings
-        
+
         # Find template path if not provided
         from agentic.utils.template import find_template_path
         self.template_path = template_path or find_template_path()
-        
+
         # Setup tools and other properties
         self._tools = []
         if tools:
             self._tools.extend(tools)
-            
+
         self.max_tokens = max_tokens
         self.memories = memories
         self.debug = debug
         self._handle_turn_start = handle_turn_start
-        self.request_queues: dict[str,Queue] = {}
+        self.request_queues: dict[str, Queue] = {}
         self.result_model = result_model
         self.queue_done_sentinel = "QUEUE_DONE"
-        
+
         # Track active agent instances by request ID
         self.agent_instances = {}
 
@@ -935,7 +941,7 @@ class BaseAgentProxy:
 
         # Ensure API key is set
         self.ensure_api_key_for_model(self.model)
-        
+
         # Handle mock settings - subclasses should implement this
         self._handle_mock_settings(mock_settings)
 
@@ -943,24 +949,24 @@ class BaseAgentProxy:
         """Check if user input matches a prompt key and return the corresponding content if it does."""
         if not self.prompts:
             return user_input
-            
+
         # Check if the input exactly matches a prompt key
         if user_input in self.prompts:
             return self.prompts[user_input]
-            
+
         # Check if the input matches a prompt key when lowercase
         lower_input = user_input.lower()
         for key, value in self.prompts.items():
             if lower_input == key.lower():
                 return value
-                
+
         # No match found, return original input
         return user_input
 
     def _handle_mock_settings(self, mock_settings):
         """Handle mock settings - to be implemented by subclasses"""
         pass
-        
+
     def _ensure_tool_secrets(self):
         """Ensure that all required secrets for tools are available"""
         from .agentic_secrets import agentic_secrets
@@ -990,7 +996,7 @@ class BaseAgentProxy:
     def is_cancelled(self):
         """Check if this agent has been cancelled"""
         return self.cancelled
-    
+
     def uncancel(self):
         """Reset the cancelled flag"""
         self.cancelled = False
@@ -1039,20 +1045,20 @@ class BaseAgentProxy:
             db_manager = DatabaseManager()
         return db_manager
 
-    def get_runs(self, user_id: str|None) -> list[Run]:
+    def get_runs(self, user_id: str | None) -> list[Run]:
         """Get all runs for this agent"""
         db_manager = self.get_db_manager()
-        
+
         try:
             return db_manager.get_runs_by_agent(self.name, user_id=user_id)
         except Exception as e:
             print(f"Error getting runs: {e}")
             return []
-        
+
     def get_run_logs(self, run_id: str) -> list[RunLog]:
         """Get logs for a specific run"""
         db_manager = self.get_db_manager()
-        
+
         try:
             return db_manager.get_run_logs(run_id)
         except Exception as e:
@@ -1064,7 +1070,7 @@ class BaseAgentProxy:
         """Dictionary of variables to make available to prompt templates."""
         if self.template_path is None:
             return {"name": self.name}  # Return default values when no template path exists
-            
+
         path = Path(self.template_path)
         if path.exists():
             try:
@@ -1073,7 +1079,7 @@ class BaseAgentProxy:
                     return prompts or {"name": self.name}
             except Exception as e:
                 print(f"Error loading prompt template: {e}")
-        
+
         return {"name": self.name}
 
     @property
@@ -1102,8 +1108,8 @@ class BaseAgentProxy:
                 # add a child agent as a tool
                 useable.append(
                     AddChild(
-                        func.get_agent().name, 
-                        func.get_agent()._agent, 
+                        func.get_agent().name,
+                        func.get_agent()._agent,
                         handoff=True
                     )
                 )
@@ -1119,7 +1125,7 @@ class BaseAgentProxy:
                 useable.append(func)
 
         return useable
-        
+
     def _update_state(self, state: dict):
         """Update the agent's state"""
         # To be overridden by subclasses
@@ -1163,9 +1169,9 @@ class BaseAgentProxy:
         if request_id in self.agent_instances:
             del self.agent_instances[request_id]
 
-    def start_request(self, request: str, request_context: dict = {}, 
-                     continue_result: dict = {}, run_id: Optional[str] = None,
-                     debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> StartRequestResponse:
+    def start_request(self, request: str, request_context: dict = {},
+                      continue_result: dict = {}, run_id: Optional[str] = None,
+                      debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> StartRequestResponse:
         """Start a new agent request"""
         self.debug.raise_level(debug)
 
@@ -1196,12 +1202,13 @@ class BaseAgentProxy:
 
         def producer(queue, request_obj, continue_result):
             depthLocal.depth = request_obj.depth
-            for event in self._next_turn(request_obj, request_context=request_context, continue_result=continue_result, request_id=request_id):
+            for event in self._next_turn(request_obj, request_context=request_context, continue_result=continue_result,
+                                         request_id=request_id):
                 queue.put(event)
             queue.put(self.queue_done_sentinel)
             # Cleanup the agent instance when done
-            self._cleanup_agent_instance(request_id)
-            
+            # self._cleanup_agent_instance(request_id)
+
         queue = Queue()
         self.request_queues[request_id] = queue
 
@@ -1209,20 +1216,28 @@ class BaseAgentProxy:
         t.start()
         return StartRequestResponse(request_id=request_id, run_id=self.run_id)
 
-    def get_events(self, request_id: str) -> Generator[Event, Any, Any]:
-        """Get events for a request"""
-        queue = self.request_queues[request_id]
-        while True:
-            event = queue.get()
-            if event == self.queue_done_sentinel:
-                break
-            yield event
-            time.sleep(0.01)
-        depthLocal.depth -= 1
+    def get_events(self, request_id: str):
+        try:
+            queue = self.request_queues[request_id]  # keep ref alive
+        except KeyError:
+            raise ValueError(f"request {request_id} not found")
+
+        try:
+            while True:
+                event = queue.get()
+                if event is self.queue_done_sentinel:
+                    break
+                yield event
+                time.sleep(0.01)
+        finally:
+            # now it’s safe to purge everything for this request
+            self.request_queues.pop(request_id, None)
+            self._cleanup_agent_instance(request_id)
+            depthLocal.depth -= 1
 
     def next_turn(self, request: str | Prompt, request_context: dict = {},
-              request_id: str = None, continue_result: dict = {},
-              debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> Generator[Event, Any, Any]:
+                  request_id: str = None, continue_result: dict = {},
+                  debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> Generator[Event, Any, Any]:
         """
         Default agent orchestration logic. Subclasses may override this.
         If not overridden, this handles prompt/resume and returns generator from agent.
@@ -1243,7 +1258,6 @@ class BaseAgentProxy:
                 )
             )
 
-
             # Transmit depth through the Prompt
             if hasattr(depthLocal, 'depth') and depthLocal.depth > prompt.depth:
                 prompt.depth = depthLocal.depth
@@ -1258,10 +1272,9 @@ class BaseAgentProxy:
             )
             return self._get_resume_generator(agent_instance, resume_input)
 
-
     def _next_turn(self, request: str | Prompt, request_context: dict = {},
-               request_id: str = None, continue_result: dict = {},
-               debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> Generator[Event, Any, Any]:
+                   request_id: str = None, continue_result: dict = {},
+                   debug: DebugLevel = DebugLevel(DebugLevel.OFF)) -> Generator[Event, Any, Any]:
         """
         Wraps `next_turn` to add run tracking and handle_event logging.
         Always used internally by the proxy to ensure consistent behavior.
@@ -1307,26 +1320,27 @@ class BaseAgentProxy:
             yield event
 
             if hasattr(event, "agent") and event.agent != self.name:
-                continue    
+                continue
 
-            # Only now: do logging after yielding
+                # Only now: do logging after yielding
             callback = self._agent.get_callback("handle_event") if hasattr(self, "_agent") else None
             if callback:
-                context = RunContext(agent=self._agent, agent_name=self.name, run_id=self.run_id, context=request_context)
+                context = RunContext(agent=self._agent, agent_name=self.name, run_id=self.run_id,
+                                     context=request_context)
                 callback(event, context)
-        
+
     def _get_prompt_generator(self, agent_instance, prompt):
         """Get generator for a new prompt - to be implemented by subclasses"""
         pass
-        
+
     def _get_resume_generator(self, agent_instance, resume_input):
         """Get generator for resuming with input - to be implemented by subclasses"""
         pass
-        
+
     def _process_generator(self, generator):
         """Process generator events - to be implemented by subclasses"""
         pass
-        
+
     def _process_turn_end(self, event):
         """Process TurnEnd event to handle result model validation"""
         if isinstance(event.result, str) and self.result_model:
@@ -1341,20 +1355,20 @@ class BaseAgentProxy:
                 except Exception as e:
                     # Create an error message event
                     error_event = ChatOutput.assistant_message(
-                        self.name, 
-                        f"Error validating result: {e}", 
+                        self.name,
+                        f"Error validating result: {e}",
                         depth=event.depth
                     )
                     # We'll yield this error event and then the original event
                     return error_event
         return event
 
-    def final_result(self, request: str, request_context: dict = {}, 
-                    event_handler: Callable[[Event], None] = None) -> Any:
+    def final_result(self, request: str, request_context: dict = {},
+                     event_handler: Callable[[Event], None] = None) -> Any:
         """Get the final result of a request"""
         request_id = self.start_request(
-            request, 
-            request_context=request_context, 
+            request,
+            request_context=request_context,
             debug=self.debug
         ).request_id
         turn_end = None
@@ -1384,14 +1398,15 @@ class BaseAgentProxy:
         """
         Implement the << operator for sending prompts to agents.
         This allows syntax like: response = agent << "prompt"
-        
+
         Args:
             prompt: The prompt to send to the agent
-            
+
         Returns:
             The final response from the agent
         """
         return self.grab_final_result(prompt)
+
 
 class RayAgentProxy(BaseAgentProxy):
     """Ray-based implementation of the agent proxy.
@@ -1414,10 +1429,10 @@ class RayAgentProxy(BaseAgentProxy):
         _AGENT_REGISTRY.append(self)
         self._create_agent_instance()
 
-    def _create_agent_instance(self, request_id: str|None=None):
+    def _create_agent_instance(self, request_id: str | None = None):
         """Initialize the Ray actor"""
         agent = ActorBaseAgent.remote(name=self.name)
-        
+
         # Set initial state
         obj_ref = agent.set_state.remote(
             SetState(
@@ -1453,17 +1468,17 @@ class RayAgentProxy(BaseAgentProxy):
         """Handle mock settings for Ray implementation"""
         if mock_settings and self.model and "mock" in self.model:
             from agentic.models import mock_provider
-            
+
             pattern = mock_settings.get("pattern", "")
             response = mock_settings.get("response", "This is a mock response.")
             tools_dict = mock_settings.get("tools", {})
-            
+
             # Set in the local mock_provider directly
             mock_provider.set_response(pattern, response)
             mock_provider.clear_tools()
             for tool_name, tool_func in tools_dict.items():
                 mock_provider.register_tool(tool_name, tool_func)
-            
+
             # Pass to the remote agent
             try:
                 ray.get(self._agent.set_mock_params.remote(pattern, response, tools_dict))
@@ -1494,7 +1509,7 @@ class RayAgentProxy(BaseAgentProxy):
     def list_functions(self) -> list[str]:
         """Gets the current list of functions from the running Ray agent"""
         return ray.get(self._agent.list_functions.remote())
-        
+
     def _get_prompt_generator(self, agent, prompt):
         """Get generator for a new prompt from a Ray agent"""
         return agent.handle_prompt_or_resume.remote(prompt)
@@ -1502,7 +1517,7 @@ class RayAgentProxy(BaseAgentProxy):
     def _get_resume_generator(self, agent, resume_input):
         """Get generator for resuming with input from a Ray agent"""
         return agent.handle_prompt_or_resume.remote(resume_input)
-        
+
     def _process_generator(self, generator):
         """Process generator events - Ray implementation"""
         for remote_next in generator:
@@ -1533,7 +1548,7 @@ class LocalAgentProxy(BaseAgentProxy):
         _AGENT_REGISTRY.append(self)
         self._create_agent_instance()
 
-    def _create_agent_instance(self, request_id: str|None=None):
+    def _create_agent_instance(self, request_id: str | None = None):
         """Create a new local agent instance for a request"""
         agent = ActorBaseAgent(name=self.name)
 
@@ -1552,7 +1567,7 @@ class LocalAgentProxy(BaseAgentProxy):
                     "result_model": self.result_model,
                 },
             ),
-        )        
+        )
         if self._handle_turn_start:
             agent.set_callback("handle_turn_start", self._handle_turn_start)
 
@@ -1571,17 +1586,17 @@ class LocalAgentProxy(BaseAgentProxy):
         """Handle mock settings for local implementation"""
         if mock_settings and self.model and "mock" in self.model:
             from agentic.models import mock_provider
-            
+
             pattern = mock_settings.get("pattern", "")
             response = mock_settings.get("response", "This is a mock response.")
             tools_dict = mock_settings.get("tools", {})
-            
+
             # Set in the local mock_provider directly
             mock_provider.set_response(pattern, response)
             mock_provider.clear_tools()
             for tool_name, tool_func in tools_dict.items():
                 mock_provider.register_tool(tool_name, tool_func)
-            
+
             # Pass to the local agent
             try:
                 self._agent.set_mock_params(pattern, response, tools_dict)
@@ -1615,15 +1630,16 @@ class LocalAgentProxy(BaseAgentProxy):
     def _get_prompt_generator(self, agent, prompt):
         """Get generator for a new prompt - Local implementation"""
         return agent.handle_prompt_or_resume(prompt)
-        
+
     def _get_resume_generator(self, agent, resume_input):
         """Get generator for resuming with input - Local implementation"""
         return agent.handle_prompt_or_resume(resume_input)
-        
+
     def _process_generator(self, generator):
         """Process generator events - Local implementation"""
         for event in generator:
             yield event
+
 
 if os.environ.get("AGENTIC_USE_RAY"):
     AgentProxyClass = RayAgentProxy
